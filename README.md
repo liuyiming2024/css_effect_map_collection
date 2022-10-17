@@ -7,7 +7,7 @@
 ![清明上河图卷轴](./demo-images/qingmingshanghetu.gif)
 
 ---
-### 黑客帝国文字雨
+### 黑客帝国文字雨1
 
 [codesandbox示例](https://codesandbox.io/embed/word-rain-e4itf)
 
