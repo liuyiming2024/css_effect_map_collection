@@ -1,0 +1,85 @@
+# 从上游 Gitee 仓库同步更新，并自动重建 README 版权声明
+#
+# 采用 fetch + merge（而非 --mirror 强推）：
+#   强推会用上游的树整体替换，本仓库新增的 .github/ 与 README 声明会被一并抹掉，
+#   导致本工作流与声明"同步一次就消失"。merge 可保留本地新增内容。
+name: Sync from upstream Gitee
+
+on:
+  schedule:
+    # 每 6 小时检查一次上游更新（避开整点高峰）
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    name: Sync from upstream
+    runs-on: ubuntu-latest
+    concurrency:
+      group: sync-upstream
+      cancel-in-progress: false
+    steps:
+      - name: 检出本仓库（含完整历史）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 配置 git 身份
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: 记录同步前状态
+        id: before
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: 拉取上游 Gitee 仓库
+        run: |
+          git remote add upstream https://gitee.com/qm1989/css_effect_map_collection.git
+          git fetch upstream master --tags --force
+
+      - name: 合并上游更新（冲突以上游为准）
+        id: merge
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          git merge upstream/master --allow-unrelated-histories -X theirs --no-edit 2>&1 | tee /tmp/merge.log
+          echo "--- merge 输出 ---"
+          cat /tmp/merge.log
+
+      - name: 合并失败时改用上游版本
+        if: steps.merge.outcome == 'failure'
+        run: |
+          echo "::warning::merge 失败，回退策略：直接采用上游树，再补回 .github/"
+          git checkout --theirs . 2>/dev/null || true
+          git checkout upstream/master -- . 2>/dev/null || true
+          # 把 .github/（本仓库自有内容）从同步前的提交里恢复回来
+          git checkout ${{ steps.before.outputs.sha }} -- .github/ 2>/dev/null || true
+          git add -A
+          git commit -m "sync: 采用上游版本（merge 冲突已按上游解决）" || echo "无变化"
+
+      - name: 重建 README 版权声明
+        run: python3 .github/scripts/add_notice.py
+
+      - name: 提交变更
+        id: commit
+        run: |
+          if ! git diff --quiet -- README.md; then
+            git add README.md
+            git commit -m "docs: 重建原作者版权与来源声明"
+            echo "changed=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 推送
+        run: |
+          git push origin HEAD:master
+
+      - name: 汇总
+        run: |
+          echo "::notice::同步完成  before=${{ steps.before.outputs.sha }}  after=$(git rev-parse HEAD)"
